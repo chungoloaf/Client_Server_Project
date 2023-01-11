@@ -9,6 +9,7 @@
 #else
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netdb.h>
@@ -33,14 +34,80 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <pthread.h>
 #if defined(_WIN32)
 #include <conio.h>
 #endif
 const int buffer = 1024;
 size_t buffsize = 1024;
 
+struct socket_params{
+    SOCKET socket_number;
+};
+
+void getcpuinfo(void* context){
+    struct socket_params *struct_ptr=(struct socket_params*) context;
+    int* templines = malloc(sizeof(int)*buffer);
+    int bytes_recv = recv(struct_ptr->socket_number, templines, buffer, 0); 
+    int lines= *templines; 
+    free(templines);
+    
+    
+    for(int y=0; y< lines-1; y++){
+        char* temp= calloc(buffer,sizeof(char));
+        recv(struct_ptr->socket_number, temp, buffer, 0);
+        printf("%s",temp);
+        free(temp);}            
+    
+}
+
+
+void *send_message(void* context){
+    struct socket_params *struct_ptr=(struct socket_params*) context;
+    char *quit_message = (char *)calloc(buffer, sizeof(char)); // buffer for message
+    quit_message = "quit\n";
+    int bytes_sent = 0;
+    printf("Enter in a message or type quit to stop connection\n\n");
+    char *message = (char *)calloc(buffer, sizeof(char)); // buffer for message
+    fgets(message, buffer, stdin); // fgets stalling
+    message = realloc(message, strlen(message)); // reallocates memory for buffer
+
+    int flag = strcmp(message, quit_message);
+    if (flag == 0)
+    {
+        CLOSESOCKET(struct_ptr->socket_number);
+        exit(-1);
+    }
+    else
+        bytes_sent = send(struct_ptr->socket_number, message, strlen(message), 0);
+        if(strcmp(message,"cpuinfo\n")==0){
+            getcpuinfo(struct_ptr);}
+
+    free(message);
+    return NULL;
+    }
+
+void *recv_message(void* context){
+            struct socket_params *struct_ptr=(struct socket_params*) context;
+            printf("Waiting for message \n");
+                char *message_buffer = (char *)calloc(buffer, sizeof(char)); // creates buffer for echoed message
+                printf("Reciving Message, \n");
+                int bytes_recv = recv(struct_ptr->socket_number, message_buffer, buffer, 0);  // received message
+                message_buffer = realloc(message_buffer, strlen(message_buffer)); // realocates memory of buffe
+
+                if (bytes_recv > 0)
+                    printf("The message is: %s \nThe bytes recv is %d \n \n", message_buffer, bytes_recv);
+
+                // sleep(1);
+                return NULL;
+            }
+
+        
+
 int main()
 {
+    pthread_t send_thread, recv_thread;
+    struct socket_params my_socket;
 #if defined(_WIN32) // Helps initilation on windows system//
     WSADATA d;
     if (WSAStartup(MAKEWORD(2, 2), &d))
@@ -55,6 +122,7 @@ int main()
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_STREAM; // TCP
+    
 
     struct addrinfo *server_connect;
     char server_address[12];
@@ -75,6 +143,7 @@ int main()
     printf("creating Socket \n");
     SOCKET server_socket;
     server_socket = socket(server_connect->ai_family, server_connect->ai_socktype, server_connect->ai_protocol); // socket created
+    my_socket.socket_number=server_socket;
     if (!ISVALIDSOCKET(server_socket))
     {
         fprintf(stderr, "Socket creation failed %d \n", GETSOCKETERRNO());
@@ -90,69 +159,53 @@ int main()
 
     freeaddrinfo(server_connect); // frees pointer
 
-    fd_set master, reads;
-    FD_ZERO(&master);
-    FD_SET(server_socket, &master);
-    int max_socket = server_socket;
-
-    while (1)
-    {
+// use select for the reading of messages top ksee if there is any to be read if not return the thread
+        
+        fd_set master;
+        FD_ZERO(&master);
+        FD_SET(server_socket, &master);
         fd_set reads;
-        reads = master;
-        char *user_choice = calloc(buffer, sizeof(char));
-        printf("Send message?(y/n) \n");
-        fgets(user_choice, buffer, stdin);
-        user_choice = realloc(user_choice, strlen(user_choice)); // reallocates memory for buffer
+        struct timeval timeout;
+        timeout.tv_sec=1;
+        timeout.tv_usec=0;
+       ////////////////////////////////////////////////// 
+        
 
-        int i;
 
-        if (*user_choice == 'y')
-        {
-            char *quit_message = (char *)calloc(buffer, sizeof(char)); // buffer for message
-            quit_message = "quit\n";
-            // quit_message = realloc(quit_message, strlen(quit_message));
-            int bytes_sent = 0;
-            free(user_choice);
-            printf("Enter in a message or type quit to stop connection\n");
-            char *message = (char *)calloc(buffer, sizeof(char)); // buffer for message
-            fgets(message, buffer, stdin);
-            message = realloc(message, strlen(message)); // reallocates memory for buffer
-
-            int flag = strcmp(message, quit_message);
-            if (flag == 0)
-            {
-                CLOSESOCKET(server_socket);
-                exit(-1);
-            }
-            else
-                bytes_sent = send(server_socket, message, strlen(message), 0);
-
-            free(message);
-        }
-
-        else
-        {
-            free(user_choice);
-            printf("Waiting for message \n");
-            if (select(max_socket + 1, &reads, 0, 0, 0) < 0)
-            {
-                fprintf(stderr, "Select failed %d \n", GETSOCKETERRNO());
+   ///////////////////////////////////////////////////////////////////     
+        
+        while(1){
+            
+            reads = master;
+            
+            if (select(server_socket+1, &reads, 0, 0, &timeout) < 0) { 
+                fprintf(stderr, "select() failed. (%d)\n", GETSOCKETERRNO());
                 return 1;
             }
-            if (FD_ISSET(server_socket, &reads))
-            {
-                char *message_buffer = (char *)calloc(buffer, sizeof(char)); // creates buffer for echoed message
-                printf("Reciving Message, \n");
-                int bytes_recv = recv(server_socket, message_buffer, buffer, 0);  // received message
-                message_buffer = realloc(message_buffer, strlen(message_buffer)); // realocates memory of buffe
 
-                if (bytes_recv > 0)
-                    printf("The message is: %s \nThe bytes recv is %d \n", message_buffer, bytes_recv);
-
-                // sleep(1);
-            }
+            if(pthread_create(&send_thread, NULL, &send_message,
+                    (void *)(intptr_t)&my_socket)==0){
+                        //fprintf(stderr,"Sending Thread Started \n");
+                         pthread_join(send_thread,NULL);
+                }
+                
+            
+        if (FD_ISSET(server_socket, &reads)) {
+            if(pthread_create(&recv_thread, NULL, &recv_message,
+                    (void *)(intptr_t)&my_socket)==0){
+                        //fprintf(stderr,"Recv Thread Started \n");
+                        pthread_join(recv_thread,NULL);
+                }
+            
+    
         }
-    }
+            
+            FD_ZERO(&reads);  
+        }
+        
+
+       
+    
 
     printf("Closing Connection \n"); // close connction
     CLOSESOCKET(server_socket);
@@ -164,7 +217,4 @@ int main()
 #endif
     return 0;
 }
-/* For the cilent side the next thing I want to do is have the client be able to send and recive 
-at the same time to do this the recv should be a new thread suing pthread create and and while loop
-it will keep on reading up you close the conncetion then the thread will join to the akmin thread
-as for the sending it will be the same thing just a sending fuction*/
+
