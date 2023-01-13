@@ -33,19 +33,26 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <signal.h>
 #include <time.h>
 #include <pthread.h>
 #if defined(_WIN32)
 #include <conio.h>
 #endif
-const int buffer = 1024;
+
+const int buffer = 1024;// buffers
 size_t buffsize = 1024;
+static volatile int keep_running =1;
 
 struct socket_params{
-    SOCKET socket_number;
+    SOCKET socket_number; // struct for multithreading
 };
 
-void getcpuinfo(void* context){
+void sighandle(){
+    keep_running=0;
+}
+
+void getcpuinfo(void* context){// function for recv cpu info
     struct socket_params *struct_ptr=(struct socket_params*) context;
     int* templines = malloc(sizeof(int)*buffer);
     int bytes_recv = recv(struct_ptr->socket_number, templines, buffer, 0); 
@@ -79,10 +86,13 @@ void *send_message(void* context){
         exit(-1);
     }
     else
-        bytes_sent = send(struct_ptr->socket_number, message, strlen(message), 0);
+        send(struct_ptr->socket_number, message, strlen(message), 0);
+        signal(SIGPIPE, sighandle);
+        
         if(strcmp(message,"cpuinfo\n")==0){
             getcpuinfo(struct_ptr);}
 
+    free (quit_message);
     free(message);
     return NULL;
     }
@@ -99,6 +109,7 @@ void *recv_message(void* context){
                     printf("The message is: %s \nThe bytes recv is %d \n \n", message_buffer, bytes_recv);
 
                 // sleep(1);
+                free(message_buffer);
                 return NULL;
             }
 
@@ -150,6 +161,7 @@ int main()
         return 1;
     }
 
+
     printf("Connecting \n");
     if (connect(server_socket, server_connect->ai_addr, server_connect->ai_addrlen))
     { // connects client and server
@@ -167,15 +179,9 @@ int main()
         fd_set reads;
         struct timeval timeout;
         timeout.tv_sec=1;
-        timeout.tv_usec=0;
-       ////////////////////////////////////////////////// 
+        timeout.tv_usec=0; 
         
-
-
-   ///////////////////////////////////////////////////////////////////     
-        
-        while(1){
-            
+        while(keep_running){
             reads = master;
             
             if (select(server_socket+1, &reads, 0, 0, &timeout) < 0) { 
@@ -207,10 +213,9 @@ int main()
        
     
 
-    printf("Closing Connection \n"); // close connction
+    printf(" Server Down Closing Connection \n"); // close connction
     CLOSESOCKET(server_socket);
 
-    // free(message_buffer);
 
 #if defined(_WIN32)
     WSACleanup();
