@@ -14,7 +14,7 @@
 #include <netdb.h>
 #include <unistd.h>
 #include <errno.h>
-
+#include <signal.h>
 
 #endif
 
@@ -44,6 +44,13 @@
 
 
 int BUFFER=1024, waitlist=15;
+static volatile int keepRunning = 1;
+
+
+void intHandler(){
+    keepRunning=0;
+}
+
 int msleep(long tms)
 {
     struct timespec ts;
@@ -247,10 +254,15 @@ struct socket_params my_socket;
     printf("Waiting for connections...\n");
 
 
-    while(1) {
+    while(keepRunning) {
+        signal(SIGINT, intHandler);
         fd_set reads;
         reads = my_socket.master;
+        
         if (select(my_socket.my_max_socket+1, &reads, 0, 0, 0) < 0) {
+            if(keepRunning == 0){
+                signal(SIGINT, intHandler);
+                break;}
             fprintf(stderr, "select() failed. (%d)\n", GETSOCKETERRNO());
             return 1;
         }
@@ -263,44 +275,46 @@ struct socket_params my_socket;
                     if(pthread_create(&fd_thread[i], NULL, &fd_handler,
                     (void *)(intptr_t)&my_socket)==0){
                         //fprintf(stderr,"Connection Handler Started \n");
-                }
+                        }
                 char *my_address=calloc(BUFFER,sizeof(char));
                 pthread_join(fd_thread[i], NULL);
 
-                }
+                }//if (FD_ISSET(i, &reads))
             
 
                  else { // this is for clients send messages it will multithread it
-                   char* read=calloc(BUFFER,sizeof(char));
+                    char* read=calloc(BUFFER,sizeof(char));
                     my_socket.message_buffer=read;
                     my_socket.message_bytes = recv(i, read, BUFFER, 0);
                     read=realloc(read,strlen(read));
                     
-                  
-                    printf("Client %d message is: %s \n",i, my_socket.message_buffer);
+                    if(read==0){
+                        printf("Closing connection from %d \n", i);
+                        FD_CLR(i, &my_socket.master);
+                        CLOSESOCKET(i);
+                        continue;
+                    }
+
+                    if(strcmp((char*)read,"\n")!=0){
+                        printf("Client %d message is: %s \n",i, my_socket.message_buffer);
                         if(strcmp(my_socket.message_buffer, "cpuinfo\n")==0){
                             getcpuinfo(&my_socket);}
                             
                     
                         else{
-                        if(pthread_create(&message_thread[i], NULL, &message_handler,
-                        (void *)(intptr_t)&my_socket)==0){
-                            //fprintf(stderr,"Message Handler Started \n");
-                            pthread_join(message_thread[i],NULL);
-                            }    
-                        }
+                            if(pthread_create(&message_thread[i], NULL, &message_handler,
+                            (void *)(intptr_t)&my_socket)==0){
+                                //fprintf(stderr,"Message Handler Started \n");
+                                pthread_join(message_thread[i],NULL);
+                                }    
+                            }
 
-                        if (my_socket.message_bytes < 1) {
-                            printf("Closing connection from %d \n", i);
-                            FD_CLR(i, &my_socket.master);
-                            CLOSESOCKET(i);
-                            continue;
-                        }
-                        free(read);
-                        
-                        
-                        
-                    }
+                            
+                    }//if(strcmp((char*)read,"\n")!=0)
+                    
+                    free(read);
+
+                }//// this is for clients send messages it will multithread it
             } //if FD_ISSET
         } //for i to max_socket
     } //while(1)
