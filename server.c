@@ -36,6 +36,7 @@
 #include <string.h>
 #include <time.h>
 #include <stdint.h>
+#include <dirent.h>
 #if defined(_WIN32)
 #include <conio.h>
 #endif
@@ -45,6 +46,22 @@
 
 int BUFFER=1024, waitlist=15;
 static volatile int keepRunning = 1;
+
+
+void concatenate_string(char* s, char* s1)
+{
+    int i;
+ 
+    int j = strlen(s);
+ 
+    for (i = 0; s1[i] != '\0'; i++) {
+        s[i + j] = s1[i];
+    }
+ 
+    s[i + j] = '\0';
+ 
+    return;
+}
 
 
 void intHandler(){
@@ -81,6 +98,48 @@ struct socket_params{
     fd_set master;
     char ** my_address;
 };
+
+
+void send_dir(void* context){
+    struct socket_params *struct_ptr=(struct socket_params*) context;
+    char path_message[50]="Enter in your path for the Directory\n";
+    char *path_buffer=calloc(BUFFER, sizeof(char));
+    msleep(10*9 );
+    send(struct_ptr->socket_number, path_message, BUFFER,0);
+    recv(struct_ptr->socket_number, path_buffer,BUFFER,0);
+    path_buffer[strlen(path_buffer)-1]='\0';
+    DIR* dir =opendir(path_buffer);
+    if(dir == NULL){
+       char *error_msg= calloc(BUFFER,sizeof(char));
+        error_msg="Path not found\n";
+        send(struct_ptr->socket_number,error_msg,BUFFER,0);
+        error_msg=NULL;
+        free(error_msg);
+        return;
+    }
+    struct dirent* entity;
+    entity= readdir(dir);
+    while(entity !=NULL){
+        char *line_buffer=calloc(BUFFER, sizeof(char));
+        line_buffer=entity->d_name;
+        msleep(10*3 );
+        send(struct_ptr->socket_number, line_buffer,BUFFER,0);
+        entity=readdir(dir);
+        line_buffer=NULL;
+        free(line_buffer);// error with this free
+    }
+    char * endph= calloc(BUFFER,sizeof(char));
+    endph="endword";
+    send(struct_ptr->socket_number,endph,10,0);
+    closedir(dir);
+    path_buffer=NULL;
+    endph=NULL;
+    free(path_buffer);
+    free(endph);
+}
+
+
+
 
 
 void getcpuinfo(void* context){
@@ -123,7 +182,7 @@ void getcpuinfo(void* context){
                                 send(j, &line, sizeof(line),0);
                                 for(int x=0; x<line; x++){
                                     send(j, cpudata[x], MAX_LEN,0);
-                                    msleep(10*7 );}
+                                    msleep(10*3 );}
                                     
                                 }
                             else
@@ -188,7 +247,7 @@ void *fd_handler(void* context){
                             NI_NUMERICHOST);
                     printf("New connection from %s its its client number is %d \n", address_buffer, socket_client);
                     struct_ptr->my_address=&address_buffer;
-                    
+                    free(address_buffer);
             return NULL;
 
 }
@@ -276,7 +335,6 @@ struct socket_params my_socket;
                     (void *)(intptr_t)&my_socket)==0){
                         //fprintf(stderr,"Connection Handler Started \n");
                         }
-                char *my_address=calloc(BUFFER,sizeof(char));
                 pthread_join(fd_thread[i], NULL);
 
                 }//if (FD_ISSET(i, &reads))
@@ -289,7 +347,9 @@ struct socket_params my_socket;
                     read=realloc(read,strlen(read));
                     
                     if(read==0){
-                        printf("Closing connection from %d \n", i);
+                        read=NULL;
+                        free(read);
+                        printf("Closing connection from %d \n", i); // connection keep closing becasue read is coming back as null need to fix that
                         FD_CLR(i, &my_socket.master);
                         CLOSESOCKET(i);
                         continue;
@@ -299,7 +359,9 @@ struct socket_params my_socket;
                         printf("Client %d message is: %s \n",i, my_socket.message_buffer);
                         if(strcmp(my_socket.message_buffer, "cpuinfo\n")==0){
                             getcpuinfo(&my_socket);}
-                            
+
+                        else if(strcmp(my_socket.message_buffer, "dir\n")==0){
+                            send_dir(&my_socket);}   
                     
                         else{
                             if(pthread_create(&message_thread[i], NULL, &message_handler,
@@ -312,6 +374,7 @@ struct socket_params my_socket;
                             
                     }//if(strcmp((char*)read,"\n")!=0)
                     
+                    read=NULL;
                     free(read);
 
                 }//// this is for clients send messages it will multithread it
