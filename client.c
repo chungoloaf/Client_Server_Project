@@ -9,12 +9,12 @@
 #else
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <unistd.h>
 #include <errno.h>
-#include <signal.h>
 
 #endif
 
@@ -31,369 +31,230 @@
 #endif
 
 #include <stdio.h>
-#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
+#include <signal.h>
 #include <time.h>
-#include <stdint.h>
-#include <dirent.h>
+#include <pthread.h>
 #if defined(_WIN32)
 #include <conio.h>
 #endif
-#include <ctype.h>
 
+const int buffer = 1024;// buffers
+size_t buffsize = 1024;
+static volatile int keep_running =1;
 
+struct socket_params{
+    SOCKET socket_number; // struct for multithreading
+};
 
-int BUFFER=1024, waitlist=15;
-static volatile int keepRunning = 1;
+void sighandle(){
+    keep_running=0;
+}
 
-
-void concatenate_string(char* s, char* s1)
-{
-    int i;
- 
-    int j = strlen(s);
- 
-    for (i = 0; s1[i] != '\0'; i++) {
-        s[i + j] = s1[i];
+void getdir(void* context){// function for recv cpu info
+    struct socket_params *struct_ptr=(struct socket_params*) context;
+    char* message_buffer=calloc(buffer,sizeof(char));
+    char *path_buffer=calloc(buffer,sizeof(char));
+    recv(struct_ptr->socket_number,message_buffer,buffer,0);
+    printf("%s",message_buffer);
+    fgets(path_buffer, buffer, stdin);
+    send(struct_ptr->socket_number,path_buffer,buffer,0);
+    free(message_buffer);
+    while(1){
+        char* message_buffer=calloc(buffer,sizeof(char));
+        recv(struct_ptr->socket_number, message_buffer, buffer,0);
+        if(strcmp(message_buffer,"endword")==0){
+            free(message_buffer);
+            break;
+        }
+        else if(strcmp(message_buffer,"Path not found\n")==0){
+            printf("%s\n", message_buffer);
+            free(message_buffer);
+            break;
+        }
+        printf("%s\n", message_buffer);
+        free(message_buffer);
     }
- 
-    s[i + j] = '\0';
- 
+    
+    
+    free(path_buffer);
     return;
 }
 
 
-void intHandler(){
-    keepRunning=0;
-}
 
-int msleep(long tms)
-{
-    struct timespec ts;
-    int ret;
-
-    if (tms < 0)
-    {
-        errno = EINVAL;
-        return -1;
-    }
-
-    ts.tv_sec = tms / 1000;
-    ts.tv_nsec = (tms % 1000) * 1000000;
-
-    do {
-        ret = nanosleep(&ts, &ts);
-    } while (ret && errno == EINTR);
-
-    return ret;
-}
-
-struct socket_params{
-    int socket_number;
-    int host_socket;
-    int message_bytes;
-    char* message_buffer;
-    SOCKET my_max_socket;
-    fd_set master;
-    char ** my_address;
-};
-
-
-void send_dir(void* context){
+void getcpuinfo(void* context){// function for recv cpu info
     struct socket_params *struct_ptr=(struct socket_params*) context;
-    char path_message[50]="Enter in your path for the Directory\n";
-    char *path_buffer=calloc(BUFFER, sizeof(char));
-    msleep(10*9 );
-    send(struct_ptr->socket_number, path_message, BUFFER,0);
-    recv(struct_ptr->socket_number, path_buffer,BUFFER,0);
-    path_buffer[strlen(path_buffer)-1]='\0';
-    DIR* dir =opendir(path_buffer);
-    if(dir == NULL){
-       char *error_msg= calloc(BUFFER,sizeof(char));
-        error_msg="Path not found\n";
-        send(struct_ptr->socket_number,error_msg,BUFFER,0);
-        error_msg=NULL;
-        free(error_msg);
-        return;
-    }
-    struct dirent* entity;
-    entity= readdir(dir);
-    while(entity !=NULL){
-        char *line_buffer=calloc(BUFFER, sizeof(char));
-        line_buffer=entity->d_name;
-        msleep(10*3 );
-        send(struct_ptr->socket_number, line_buffer,BUFFER,0);
-        entity=readdir(dir);
-        line_buffer=NULL;
-        free(line_buffer);// error with this free
-    }
-    char * endph= calloc(BUFFER,sizeof(char));
-    endph="endword";
-    send(struct_ptr->socket_number,endph,10,0);
-    closedir(dir);
-    path_buffer=NULL;
-    endph=NULL;
-    free(path_buffer);
-    free(endph);
-}
-
-
-
-
-
-void getcpuinfo(void* context){
-    struct socket_params *struct_ptr=(struct socket_params*) context;
-    char c;
-    FILE *fptr;
-    int MAX_LINES= 500;
-    int  MAX_LEN= 1000;
-
-
-    char ** cpudata=malloc(sizeof(char*)*MAX_LINES);
-    for(int x=0; x<MAX_LINES ; x++){
-        cpudata[x]=malloc(sizeof(char)*MAX_LEN);
-    }
-
-    fptr= fopen("/proc/cpuinfo", "r");
-    if (fptr == NULL){
-        printf("Error opening file \n");
-    }
+    int* templines = malloc(sizeof(int)*buffer);
+    int bytes_recv = recv(struct_ptr->socket_number, templines, buffer, 0); 
+    int lines= *templines; 
+    free(templines);
     
+    
+    for(int y=0; y< lines-1; y++){
+        char* temp= calloc(buffer,sizeof(char));
+        recv(struct_ptr->socket_number, temp, buffer, 0);
+        printf("%s",temp);
+        free(temp);}            
+    
+}
+
+
+void *send_message(void* context){
+    struct socket_params *struct_ptr=(struct socket_params*) context;
+    int bytes_sent = 0;
+    printf("Enter in a message or type quit to stop connection\n\n");
+    char *message = (char *)calloc(buffer, sizeof(char)); // buffer for message
+    fgets(message, buffer, stdin); // fgets stalling
+    message = realloc(message, strlen(message)); // reallocates memory for buffer
+
+    int flag = strcmp(message, "quit\n");
+    if (flag == 0)
+    {
+        free(message);
+        CLOSESOCKET(struct_ptr->socket_number);
+        exit(-1);
+    }
     else{
-       
-        int line=0;
-        while (!feof(fptr) && !ferror(fptr))
-    {
-        if(fgets(cpudata[line], MAX_LEN, fptr) != NULL){
-            line++;
-        }
+        send(struct_ptr->socket_number, message, strlen(message), 0);}
         
         
-    }
-    
-    int *lineptr= &line;
-    SOCKET j;
-    printf("Sending CPU information to client %d \n", struct_ptr->socket_number);
-
-                   for (j = 1; j <= struct_ptr->my_max_socket; ++j) {
-                        if (FD_ISSET(j, &struct_ptr->master)) {
-                            if ( j == struct_ptr->socket_number){
-                                send(j, &line, sizeof(line),0);
-                                for(int x=0; x<line; x++){
-                                    send(j, cpudata[x], MAX_LEN,0);
-                                    msleep(10*3 );}
-                                    
-                                }
-                            else
-                                 continue;
-                               }
-}         
-    }
-
-                
-
-
-    for (int x =0; x<MAX_LINES; x++){
-        free(cpudata[x]);
-        cpudata[x]=NULL;
-    }
-    free(cpudata);
-    cpudata=NULL;
-    fclose(fptr);
-}
-
-
-void *message_handler(void* context){
-    
-    struct socket_params *struct_ptr=(struct socket_params*) context;
-                SOCKET j;
-                   for (j = 1; j <= struct_ptr->my_max_socket; ++j) {
-                        if (FD_ISSET(j, &struct_ptr->master)) {
-                            if (j == struct_ptr->host_socket || j == struct_ptr->socket_number)
-                                continue;
-                            else
-
-                                send(j, struct_ptr->message_buffer, struct_ptr->message_bytes,0);
-                        }
-                    }
-                    return NULL;
-}
-
-
-void *fd_handler(void* context){
-                    struct socket_params *struct_ptr=(struct socket_params*) context;
-                    struct sockaddr_storage client_address;
-                    socklen_t client_len = sizeof(client_address);
-                    SOCKET socket_client = accept((int)struct_ptr->host_socket,
-                            (struct sockaddr*) &client_address,&client_len);
-                    if (!ISVALIDSOCKET(socket_client)){
-                        fprintf(stderr, "accept() failed. (%d)\n",
-                                GETSOCKETERRNO());
-                        EXIT_FAILURE;
-                    }
-                    char welcome_message[30]="Welcome to the chat server \n";
-                    send(socket_client, welcome_message, strlen(welcome_message), 0);
+        signal(SIGPIPE, sighandle);
+        
+        if(strcmp(message,"cpuinfo\n")==0){
+            getcpuinfo(struct_ptr);}
+        else if(strcmp(message,"dir\n")==0){
+            getdir(struct_ptr);}
+        
 
     
-                    FD_SET(socket_client,&struct_ptr->master);
-                    if (socket_client > struct_ptr->my_max_socket)
-                        struct_ptr->my_max_socket = socket_client;
-                    
-                    char *address_buffer=calloc(BUFFER,sizeof(char));
-                    getnameinfo((struct sockaddr*)&client_address,
-                            client_len,
-                            address_buffer, BUFFER, 0, 0,
-                            NI_NUMERICHOST);
-                    printf("New connection from %s its its client number is %d \n", address_buffer, socket_client);
-                    struct_ptr->my_address=&address_buffer;
-                    free(address_buffer);
-            return NULL;
+    free(message);
+    return NULL;
+    }
 
-}
+void *recv_message(void* context){
+            struct socket_params *struct_ptr=(struct socket_params*) context;
+            printf("Waiting for message \n");
+                char *message_buffer = (char *)calloc(buffer, sizeof(char)); // creates buffer for echoed message
+                printf("Reciving Message, \n");
+                int bytes_recv = recv(struct_ptr->socket_number, message_buffer, buffer, 0);  // received message
+                message_buffer = realloc(message_buffer, strlen(message_buffer)); // realocates memory of buffe
 
-int main() {
-pthread_t connection_thread[waitlist], message_thread[15],fd_thread[15];
-struct socket_params my_socket;
-#if defined(_WIN32)
+                if (bytes_recv > 0){
+                    printf("The message is: %s \nThe bytes recv is %d \n \n", message_buffer, bytes_recv);}
+
+                free(message_buffer);
+                return NULL;
+            }
+
+        
+
+int main()
+{
+    pthread_t send_thread, recv_thread;
+    struct socket_params my_socket;
+#if defined(_WIN32) // Helps initilation on windows system//
     WSADATA d;
-    if (WSAStartup(MAKEWORD(2, 2), &d)) {
+    if (WSAStartup(MAKEWORD(2, 2), &d))
+    {
         fprintf(stderr, "Failed to initialize.\n");
         return 1;
     }
 #endif
 
-
-    printf("Configuring local address...\n");
+    printf("Initilize address \n");
     struct addrinfo hints;
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_INET;
-    hints.ai_socktype = SOCK_STREAM;
-    hints.ai_flags = AI_PASSIVE;
+    hints.ai_socktype = SOCK_STREAM; // TCP
+    
 
-    struct addrinfo *bind_address;
-    getaddrinfo("10.0.0.185", "8080", &hints, &bind_address);
+    struct addrinfo *server_connect;
+    char server_address[12];
+    printf("What is severs IPV4 address? \n");
+    scanf("%s", server_address);
 
-
-    printf("Creating socket...\n");
-    SOCKET socket_listen; 
-    socket_listen = socket(bind_address->ai_family,
-            bind_address->ai_socktype, bind_address->ai_protocol);
-    my_socket.host_socket=socket_listen;
-    if (!ISVALIDSOCKET(socket_listen)) {
-        fprintf(stderr, "socket() failed. (%d)\n", GETSOCKETERRNO());
+    if (getaddrinfo(server_address, "8080", &hints, &server_connect))
+    { // sets server IP and port
+        fprintf(stderr, "Getinfo failed %d \n", GETSOCKETERRNO());
         return 1;
     }
 
-    int yes=1;
-    if(setsockopt(socket_listen, SOL_SOCKET, SO_REUSEADDR,// helps with timeout issues on binding socket
-    (void*)&yes,sizeof(yes))<0){
-        fprintf(stderr, "Setsockopt failed %d \n", GETSOCKETERRNO());
-    }
+    char addr_buff[100];
 
-    printf("Binding socket to local address...\n");
-    if (bind(socket_listen,
-                bind_address->ai_addr, bind_address->ai_addrlen)) {
-        fprintf(stderr, "bind() failed. (%d)\n", GETSOCKETERRNO());
-        return 1;
-    }
-    freeaddrinfo(bind_address);
+    getnameinfo(server_connect->ai_addr, server_connect->ai_addrlen, addr_buff, sizeof(addr_buff), 0, 0, NI_NUMERICHOST); // gets server IP and outputs it
+    printf("Connecting to %s ", addr_buff);
 
-
-    printf("Listening...\n");
-    if (listen(socket_listen, 10) < 0) {
-        fprintf(stderr, "listen() failed. (%d)\n", GETSOCKETERRNO());
+    printf("creating Socket \n");
+    SOCKET server_socket;
+    server_socket = socket(server_connect->ai_family, server_connect->ai_socktype, server_connect->ai_protocol); // socket created
+    my_socket.socket_number=server_socket;
+    if (!ISVALIDSOCKET(server_socket))
+    {
+        fprintf(stderr, "Socket creation failed %d \n", GETSOCKETERRNO());
         return 1;
     }
 
-    FD_ZERO(&my_socket.master);
-    FD_SET(socket_listen, &my_socket.master);
-    my_socket.my_max_socket = socket_listen;
 
-    printf("Waiting for connections...\n");
+    printf("Connecting \n");
+    if (connect(server_socket, server_connect->ai_addr, server_connect->ai_addrlen))
+    { // connects client and server
+        fprintf(stderr, "Connect failed %d \n", GETSOCKETERRNO());
+        return 1;
+    }
 
+    freeaddrinfo(server_connect); // frees pointer
 
-    while(keepRunning) {
-        signal(SIGINT, intHandler);
-        fd_set reads;
-        reads = my_socket.master;
+// use select for the reading of messages top ksee if there is any to be read if not return the thread
         
-        if (select(my_socket.my_max_socket+1, &reads, 0, 0, 0) < 0) {
-            if(keepRunning == 0){
-                signal(SIGINT, intHandler);
-                break;}
-            fprintf(stderr, "select() failed. (%d)\n", GETSOCKETERRNO());
-            return 1;
-        }
-
-        SOCKET i;
-        for(i = 1; i <= my_socket.my_max_socket; ++i) {
-            my_socket.socket_number=i;
-            if (FD_ISSET(i, &reads)) {
-                if (i == socket_listen) {
-                    if(pthread_create(&fd_thread[i], NULL, &fd_handler,
-                    (void *)(intptr_t)&my_socket)==0){
-                        //fprintf(stderr,"Connection Handler Started \n");
-                        }
-                pthread_join(fd_thread[i], NULL);
-
-                }//if (FD_ISSET(i, &reads))
+        fd_set master;
+        FD_ZERO(&master);
+        FD_SET(server_socket, &master);
+        fd_set reads;
+        struct timeval timeout;
+        timeout.tv_sec=1;
+        timeout.tv_usec=0; 
+        
+        while(keep_running){
+            reads = master;
             
+            if (select(server_socket+1, &reads, 0, 0, &timeout) < 0) { 
+                fprintf(stderr, "select() failed. (%d)\n", GETSOCKETERRNO());
+                return 1;
+            }
 
-                 else { // this is for clients send messages it will multithread it
-                    char* read=calloc(BUFFER,sizeof(char));
-                    my_socket.message_buffer=read;
-                    my_socket.message_bytes = recv(i, read, BUFFER, 0);
-                    read=realloc(read,strlen(read));
-                    
-                    if(read==0){
-                        read=NULL;
-                        free(read);
-                        printf("Closing connection from %d \n", i); // connection keep closing becasue read is coming back as null need to fix that
-                        FD_CLR(i, &my_socket.master);
-                        CLOSESOCKET(i);
-                        continue;
-                    }
+            if(pthread_create(&send_thread, NULL, &send_message,
+                    (void *)(intptr_t)&my_socket)==0){
+                        //fprintf(stderr,"Sending Thread Started \n");
+                         pthread_join(send_thread,NULL);
+                }
+                
+            
+        if (FD_ISSET(server_socket, &reads)) {
+            if(pthread_create(&recv_thread, NULL, &recv_message,
+                    (void *)(intptr_t)&my_socket)==0){
+                        //fprintf(stderr,"Recv Thread Started \n");
+                        pthread_join(recv_thread,NULL);
+                }
+            
+    
+        }
+            
+            FD_ZERO(&reads);  
+        }
+        
 
-                    if(strcmp((char*)read,"\n")!=0){
-                        printf("Client %d message is: %s \n",i, my_socket.message_buffer);
-                        if(strcmp(my_socket.message_buffer, "cpuinfo\n")==0){
-                            getcpuinfo(&my_socket);}
+       
+    
 
-                        else if(strcmp(my_socket.message_buffer, "dir\n")==0){
-                            send_dir(&my_socket);}   
-                    
-                        else{
-                            if(pthread_create(&message_thread[i], NULL, &message_handler,
-                            (void *)(intptr_t)&my_socket)==0){
-                                //fprintf(stderr,"Message Handler Started \n");
-                                pthread_join(message_thread[i],NULL);
-                                }    
-                            }
+    printf(" Server Down Closing Connection \n"); // close connction
+    CLOSESOCKET(server_socket);
 
-                            
-                    }//if(strcmp((char*)read,"\n")!=0)
-                    
-                    read=NULL;
-                    free(read);
-
-                }//// this is for clients send messages it will multithread it
-            } //if FD_ISSET
-        } //for i to max_socket
-    } //while(1)
-
-
-
-    printf("Closing listening socket...\n");
-    CLOSESOCKET(socket_listen);
 
 #if defined(_WIN32)
     WSACleanup();
 #endif
-
-
-    printf("Finished.\n");
-
     return 0;
 }
 
